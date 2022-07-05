@@ -38,12 +38,16 @@ func (c *Coordinator) Finish(args *TaskDoneArgs, reply *TaskDoneReply) error {
 	defer c.mu.Unlock()
 	if args.TaskType == 0 {
 		c.mapTasks[args.Index] = -1
-		fmt.Printf("Map task %v finished\n", args.Index)
+		if DEBUG {
+			fmt.Printf("Map task %v finished\n", args.Index)
+		}
 		// return nil
 	}
 	if args.TaskType == 1 {
 		c.reduceTasks[args.Index] = -1
-		fmt.Printf("Reduce task %v finished\n", args.Index)
+		if DEBUG {
+			fmt.Printf("Reduce task %v finished\n", args.Index)
+		}
 		// return nil
 	}
 	for _, state := range c.mapTasks {
@@ -72,7 +76,9 @@ func (c *Coordinator) RequestTask(args *RequestTask, reply *RequestTaskReply) er
 			reply.MapFileName = c.files[i]
 			reply.NReduce = c.nReduce
 			c.mapTasks[i] = 0
-			fmt.Printf("Send map task %v\n", reply)
+			if DEBUG {
+				fmt.Printf("Send map task %v\n", reply)
+			}
 			return nil
 		}
 		if state >= 0 {
@@ -88,7 +94,9 @@ func (c *Coordinator) RequestTask(args *RequestTask, reply *RequestTaskReply) er
 				reply.NReduce = c.nReduce
 				reply.NMap = c.nMap
 				c.reduceTasks[i] = 0
-				fmt.Printf("Send reduce task %v\n", reply)
+				if DEBUG {
+					fmt.Printf("Send reduce task %v\n", reply)
+				}
 				return nil
 			}
 		}
