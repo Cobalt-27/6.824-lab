@@ -18,7 +18,8 @@ type Coordinator struct {
 	nMap        int
 	files       []string
 	mapTasks    []int //positive for id, 0 for waiting, negative for finish
-	reduceTasks []int
+	reduceTasks []int //same as mapTasks
+	idleCounter int
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -67,6 +68,19 @@ func (c *Coordinator) Finish(args *TaskDoneArgs, reply *TaskDoneReply) error {
 func (c *Coordinator) RequestTask(args *RequestTask, reply *RequestTaskReply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.idleCounter > 10 {
+		//someone is crashed
+		for i := 0; i < c.nMap; i++ {
+			if c.mapTasks[i] == 0 {
+				c.mapTasks[i] = 1
+			}
+		}
+		for i := 0; i < c.nReduce; i++ {
+			if c.reduceTasks[i] == 0 {
+				c.reduceTasks[i] = 1
+			}
+		}
+	}
 	mapFinish := true
 	for i := 0; i < c.nMap; i++ {
 		state := c.mapTasks[i]
@@ -79,6 +93,7 @@ func (c *Coordinator) RequestTask(args *RequestTask, reply *RequestTaskReply) er
 			if DEBUG {
 				fmt.Printf("Send map task %v\n", reply)
 			}
+			c.idleCounter = 0
 			return nil
 		}
 		if state >= 0 {
@@ -97,11 +112,13 @@ func (c *Coordinator) RequestTask(args *RequestTask, reply *RequestTaskReply) er
 				if DEBUG {
 					fmt.Printf("Send reduce task %v\n", reply)
 				}
+				c.idleCounter = 0
 				return nil
 			}
 		}
 	}
-	reply.TaskType = -1
+	reply.TaskType = -1 //worker stay idle
+	c.idleCounter++
 	return nil
 }
 
