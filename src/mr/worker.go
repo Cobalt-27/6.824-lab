@@ -1,10 +1,16 @@
 package mr
 
-import "fmt"
-import "log"
-import "net/rpc"
-import "hash/fnv"
-
+import (
+	"errors"
+	"fmt"
+	"hash/fnv"
+	"io/ioutil"
+	"log"
+	"net/rpc"
+	"os"
+	"strings"
+	"time"
+)
 
 //
 // Map functions return a slice of KeyValue.
@@ -12,6 +18,12 @@ import "hash/fnv"
 type KeyValue struct {
 	Key   string
 	Value string
+}
+
+func check(e error) {
+	if e != nil {
+		panic(e)
+	}
 }
 
 //
@@ -24,18 +36,111 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
+func WriteToFile(fileName string, kva []KeyValue) {
+	f, err := os.Create(fileName)
+	check(err)
+	defer f.Close()
+	for _, kv := range kva {
+		_, err := f.WriteString(kv.Key + " " + kv.Value + "\n")
+		check(err)
+	}
+}
+
+func ReadFile(fileName string) []KeyValue {
+	res := make([]KeyValue, 0)
+	f, err := os.Open(fileName)
+	check(err)
+	oldStdin := os.Stdin
+	os.Stdin = f
+	for {
+		kv := KeyValue{}
+		_, err := fmt.Scanf("%s %s", &kv.Key, &kv.Value)
+		if err != nil || len(strings.TrimSpace(kv.Key)) == 0 {
+			break
+		}
+		res = append(res, kv)
+	}
+	os.Stdin = oldStdin
+	f.Close()
+	return res
+}
 
 //
 // main/mrworker.go calls this function.
 //
-func Worker(mapf func(string, string) []KeyValue,
-	reducef func(string, []string) string) {
+func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string) string) {
+	os.MkdirAll("./temp", os.ModePerm)
+	for {
+		reply, err := RequestForTask()
+		if err != nil {
+			fmt.Println("request task failed")
+			continue
+		}
+		if reply.TaskType == 0 {
+			fmt.Printf("Get map task %v\n", reply.Index)
+			content, _ := ioutil.ReadFile(reply.MapFileName)
+			mapped := mapf(reply.MapFileName, string(content))
+			mat := make([][]KeyValue, reply.NReduce)
+			for _, kv := range mapped {
+				idx := ihash(kv.Key) % reply.NReduce
+				mat[idx] = append(mat[idx], kv)
+			}
 
-	// Your worker implementation here.
+			check(err)
+			for i := 0; i < reply.NReduce; i++ {
+				WriteToFile(fmt.Sprintf("./temp/%v %v.mapped", reply.Index, i), mat[i])
+				// WriteToFile("./temp/"+fmt.Sprint(reply.Index)+" "+fmt.Sprint(i)+".mapped", mat[i])
+			}
+			ReportFinish(reply.TaskType, reply.Index)
+		} else if reply.TaskType == 1 {
+			fmt.Printf("Get reduce task %v\n", reply.Index)
+			count := make(map[string]int)
+			for i := 0; i < reply.NMap; i++ {
+				kva := ReadFile(fmt.Sprintf("./temp/%v %v.mapped", i, reply.Index))
+				for _, kv := range kva {
+					v, prs := count[kv.Key]
+					if !prs {
+						count[kv.Key] = 1
+					} else {
+						count[kv.Key] = v + 1
+					}
+				}
+			}
+			kva := make([]KeyValue, 0)
+			for k, v := range count {
+				kva = append(kva, KeyValue{k, fmt.Sprintf("%v", v)})
+			}
+			// fmt.Print(count)
+			WriteToFile(fmt.Sprintf("mr-out-%v", reply.Index), kva)
+			ReportFinish(reply.TaskType, reply.Index)
+		} else {
+			fmt.Printf("Stay idle\n")
+		}
+		time.Sleep(time.Second)
+	}
+}
 
-	// uncomment to send the Example RPC to the coordinator.
-	// CallExample()
+func ReportFinish(taskType int, idx int) {
+	args := TaskDoneArgs{}
+	args.Index = idx
+	args.TaskType = taskType
+	reply := TaskDoneReply{}
+	ok := false
+	for !ok {
+		ok = call("Coordinator.Finish", &args, &reply)
+	}
+}
 
+func RequestForTask() (RequestTaskReply, error) {
+	args := RequestTask{}
+	reply := RequestTaskReply{}
+	ok := call("Coordinator.RequestTask", &args, &reply)
+	fmt.Printf("reply: %v\n", reply)
+	if !ok {
+		fmt.Printf("request task failed!\n")
+		return RequestTaskReply{}, errors.New("RPC call failed")
+	}
+	return reply, nil
 }
 
 //

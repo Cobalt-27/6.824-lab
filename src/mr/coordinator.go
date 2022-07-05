@@ -1,15 +1,24 @@
 package mr
 
-import "log"
-import "net"
-import "os"
-import "net/rpc"
-import "net/http"
-
+import (
+	"fmt"
+	"log"
+	"net"
+	"net/http"
+	"net/rpc"
+	"os"
+	"sync"
+)
 
 type Coordinator struct {
 	// Your definitions here.
-
+	wg          sync.WaitGroup
+	done        bool
+	nReduce     int
+	nMap        int
+	files       []string
+	mapTasks    []int //positive for id, 0 for waiting, negative for finish
+	reduceTasks []int
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -24,6 +33,68 @@ func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 	return nil
 }
 
+func (c *Coordinator) Finish(args *TaskDoneArgs, reply *TaskDoneReply) error {
+	if args.TaskType == 0 {
+		c.mapTasks[args.Index] = -1
+		fmt.Printf("Map task %v finished\n", args.Index)
+		// return nil
+	}
+	if args.TaskType == 1 {
+		c.reduceTasks[args.Index] = -1
+		fmt.Printf("Reduce task %v finished\n", args.Index)
+		// return nil
+	}
+	for _, state := range c.mapTasks {
+		if state >= 0 {
+			return nil
+		}
+	}
+	for _, state := range c.reduceTasks {
+		if state >= 0 {
+			return nil
+		}
+	}
+	c.wg.Wait()
+	c.wg.Add(1)
+	c.done = true
+	c.wg.Done()
+	return nil
+}
+
+func (c *Coordinator) RequestTask(args *RequestTask, reply *RequestTaskReply) error {
+	mapFinish := true
+	for i := 0; i < c.nMap; i++ {
+		state := c.mapTasks[i]
+		if state > 0 {
+			reply.TaskType = 0
+			reply.Index = i
+			reply.MapFileName = c.files[i]
+			reply.NReduce = c.nReduce
+			c.mapTasks[i] = 0
+			fmt.Printf("Send map task %v\n", reply)
+			return nil
+		}
+		if state >= 0 {
+			mapFinish = false
+		}
+	}
+	if mapFinish {
+		for i := 0; i < c.nReduce; i++ {
+			state := c.reduceTasks[i]
+			if state > 0 {
+				reply.TaskType = 1
+				reply.Index = i
+				reply.NReduce = c.nReduce
+				reply.NMap = c.nMap
+				c.reduceTasks[i] = 0
+				fmt.Printf("Send reduce task %v\n", reply)
+				return nil
+			}
+		}
+	}
+	reply.TaskType = -1
+	return nil
+}
 
 //
 // start a thread that listens for RPCs from worker.go
@@ -46,12 +117,21 @@ func (c *Coordinator) server() {
 // if the entire job has finished.
 //
 func (c *Coordinator) Done() bool {
-	ret := false
-
-	// Your code here.
-
-
-	return ret
+	c.wg.Wait()
+	c.wg.Add(1)
+	res := c.done
+	c.wg.Done()
+	return res
+	// for _, state := range c.mapTasks {
+	// 	if state >= 0 {
+	// 		return false
+	// 	}
+	// }
+	// for _, state := range c.reduceTasks {
+	// 	if state >= 0 {
+	// 		return false
+	// 	}
+	// }
 }
 
 //
@@ -61,9 +141,19 @@ func (c *Coordinator) Done() bool {
 //
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
-
+	c.files = files
+	c.mapTasks = make([]int, len(files))
+	c.reduceTasks = make([]int, nReduce)
+	c.nReduce = nReduce
+	c.nMap = len(files)
+	for i := 0; i < c.nMap; i++ {
+		c.mapTasks[i] = 1
+	}
+	for i := 0; i < nReduce; i++ {
+		c.reduceTasks[i] = 1
+	}
+	c.wg = sync.WaitGroup{}
 	// Your code here.
-
 
 	c.server()
 	return &c

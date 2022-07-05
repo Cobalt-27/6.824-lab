@@ -1,0 +1,4 @@
+rm mr-out*
+rm temp/*
+echo coordinator started
+go run -race mrcoordinator.go pg-*.txt
