@@ -36,7 +36,7 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
-func WriteToFile(fileName string, kva []KeyValue) {
+func WriteKVToFile(fileName string, kva []KeyValue) {
 	f, err := os.Create(fileName)
 	check(err)
 	defer f.Close()
@@ -88,30 +88,30 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 
 			check(err)
 			for i := 0; i < reply.NReduce; i++ {
-				WriteToFile(fmt.Sprintf("./temp/%v %v.mapped", reply.Index, i), mat[i])
+				WriteKVToFile(fmt.Sprintf("./temp/%v %v.mapped", reply.Index, i), mat[i])
 				// WriteToFile("./temp/"+fmt.Sprint(reply.Index)+" "+fmt.Sprint(i)+".mapped", mat[i])
 			}
 			ReportFinish(reply.TaskType, reply.Index)
 		} else if reply.TaskType == 1 {
 			fmt.Printf("Get reduce task %v\n", reply.Index)
-			count := make(map[string]int)
+			merged := make(map[string]([]string))
 			for i := 0; i < reply.NMap; i++ {
 				kva := ReadFile(fmt.Sprintf("./temp/%v %v.mapped", i, reply.Index))
 				for _, kv := range kva {
-					v, prs := count[kv.Key]
+					_, prs := merged[kv.Key]
 					if !prs {
-						count[kv.Key] = 1
-					} else {
-						count[kv.Key] = v + 1
+						merged[kv.Key] = make([]string, 0)
+
 					}
+					merged[kv.Key] = append(merged[kv.Key], kv.Value)
 				}
 			}
 			kva := make([]KeyValue, 0)
-			for k, v := range count {
-				kva = append(kva, KeyValue{k, fmt.Sprintf("%v", v)})
+			for k, v := range merged {
+				kva = append(kva, KeyValue{k, reducef(k, v)})
 			}
 			// fmt.Print(count)
-			WriteToFile(fmt.Sprintf("mr-out-%v", reply.Index), kva)
+			WriteKVToFile(fmt.Sprintf("mr-out-%v", reply.Index), kva)
 			ReportFinish(reply.TaskType, reply.Index)
 		} else {
 			fmt.Printf("Stay idle\n")
@@ -135,7 +135,6 @@ func RequestForTask() (RequestTaskReply, error) {
 	args := RequestTask{}
 	reply := RequestTaskReply{}
 	ok := call("Coordinator.RequestTask", &args, &reply)
-	fmt.Printf("reply: %v\n", reply)
 	if !ok {
 		fmt.Printf("request task failed!\n")
 		return RequestTaskReply{}, errors.New("RPC call failed")

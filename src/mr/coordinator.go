@@ -12,7 +12,7 @@ import (
 
 type Coordinator struct {
 	// Your definitions here.
-	wg          sync.WaitGroup
+	mu          sync.Mutex
 	done        bool
 	nReduce     int
 	nMap        int
@@ -34,6 +34,8 @@ func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 }
 
 func (c *Coordinator) Finish(args *TaskDoneArgs, reply *TaskDoneReply) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if args.TaskType == 0 {
 		c.mapTasks[args.Index] = -1
 		fmt.Printf("Map task %v finished\n", args.Index)
@@ -54,14 +56,13 @@ func (c *Coordinator) Finish(args *TaskDoneArgs, reply *TaskDoneReply) error {
 			return nil
 		}
 	}
-	c.wg.Wait()
-	c.wg.Add(1)
 	c.done = true
-	c.wg.Done()
 	return nil
 }
 
 func (c *Coordinator) RequestTask(args *RequestTask, reply *RequestTaskReply) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	mapFinish := true
 	for i := 0; i < c.nMap; i++ {
 		state := c.mapTasks[i]
@@ -117,21 +118,10 @@ func (c *Coordinator) server() {
 // if the entire job has finished.
 //
 func (c *Coordinator) Done() bool {
-	c.wg.Wait()
-	c.wg.Add(1)
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	res := c.done
-	c.wg.Done()
 	return res
-	// for _, state := range c.mapTasks {
-	// 	if state >= 0 {
-	// 		return false
-	// 	}
-	// }
-	// for _, state := range c.reduceTasks {
-	// 	if state >= 0 {
-	// 		return false
-	// 	}
-	// }
 }
 
 //
@@ -152,7 +142,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	for i := 0; i < nReduce; i++ {
 		c.reduceTasks[i] = 1
 	}
-	c.wg = sync.WaitGroup{}
+	c.mu = sync.Mutex{}
 	// Your code here.
 
 	c.server()
