@@ -4,7 +4,7 @@
 
 - [x] lab1 MapReduce
 - [x] lab2A Raft,leader election
-- [ ] lab2B
+- [ ] lab2B Raft,log
 - [ ] lab2C
 - [ ] lab2D
 - [ ] lab3
