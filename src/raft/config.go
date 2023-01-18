@@ -597,7 +597,9 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 					}
 				}
 				time.Sleep(20 * time.Millisecond)
+				testDebug("%v %v\n", nd, cmd1)
 			}
+
 			if retry == false {
 				cfg.t.Fatalf("one(%v) failed to reach agreement", cmd)
 			}
@@ -609,6 +611,11 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 		cfg.t.Fatalf("one(%v) failed to reach agreement", cmd)
 	}
 	return -1
+}
+
+func testDebug(s string, a ...interface{}) {
+	return
+	fmt.Printf(s, a...)
 }
 
 // start a Test.
