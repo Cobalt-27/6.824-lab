@@ -308,10 +308,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 				newLog[i] = args.Entries[i].EntryVal
 				newLogTerm[i] = args.Entries[i].EntryTerm
 			}
-			rf.log = append(rf.log[:args.PrevLogIndex+1], newLog...)
+			start := args.PrevLogIndex + 1
+			rf.log = append(rf.log[:start], newLog...)
 			rf.logTerm = append(rf.logTerm, newLogTerm...)
 			rf.commitIndex = min(args.LeaderCommit, rf.lastLogIndex())
-			rf.debug("added %d log", addCount)
+			rf.debug("LOG+=%d log[%v]=%v lastLog=%v", addCount, start, rf.log[start], rf.lastLogIndex())
 			rf.debug("COMMIT<-%d", rf.commitIndex)
 			reply.Success = true
 			return
@@ -469,16 +470,25 @@ func (rf *Raft) updateCommit() {
 func (rf *Raft) checkApply() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	if rf.lastApplied >= 0 && rf.lastApplied < rf.commitIndex {
-		for i := rf.lastApplied; i <= rf.commitIndex; i++ {
-			rf.apply(i)
+	if rf.lastApplied < rf.commitIndex {
+		start := rf.lastApplied
+		if start < 0 {
+			start = 0
+		}
+		for i := start; i <= rf.commitIndex; i++ {
+			rf.debug("APPLY %d", i)
+			msg := ApplyMsg{
+				CommandValid: true,
+				Command:      rf.log[i],
+				CommandIndex: i,
+			}
+			rf.mu.Unlock()
+			rf.applyChan <- msg
+			rf.mu.Lock()
+			rf.debug("APPLYMSG SENT idx=%d", i)
+			rf.lastApplied = i
 		}
 	}
-}
-
-//thread unsafe
-func (rf *Raft) apply(index int) {
-	rf.debug("APPLY %d", index)
 }
 
 //
@@ -568,15 +578,22 @@ func (rf *Raft) heartbeat() {
 
 func (rf *Raft) sendHeartbeats() {
 	if rf.role == leader {
-		args := AppendEntriesArgs{
-			LearderId: rf.me,
-			Term:      rf.currentTerm,
-		}
 		reply := AppendEntriesReply{}
 		for remote := range rf.peers {
 			if remote == rf.me {
 				rf.lastHeartBeat = time.Now().UnixMilli()
 				continue
+			}
+			args := AppendEntriesArgs{
+				LearderId:    rf.me,
+				Term:         rf.currentTerm,
+				PrevLogIndex: rf.lastLogIndex(),
+				LeaderCommit: rf.commitIndex,
+			}
+			if rf.lastLogIndex() < 0 {
+				args.PrevLogTerm = 0
+			} else {
+				args.PrevLogTerm = rf.logTerm[rf.lastLogIndex()]
 			}
 			go func(to int, args AppendEntriesArgs, reply AppendEntriesReply) {
 				rf.sendAppendEntries(to, &args, &reply)
@@ -693,6 +710,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 	rf.currentTerm = 0
+	rf.commitIndex = -1
 	rf.applyChan = applyCh
 	rf.lastApplied = -1
 	rf.nextIndex = make([]int, len(peers))

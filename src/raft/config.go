@@ -503,6 +503,7 @@ func (cfg *config) nCommitted(index int) (int, interface{}) {
 
 		cfg.mu.Lock()
 		cmd1, ok := cfg.logs[i][index]
+		testDebug("NCOMMIT logs[%v][%v]=%v", i, index, cmd1)
 		cfg.mu.Unlock()
 
 		if ok {
@@ -589,6 +590,7 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 			t1 := time.Now()
 			for time.Since(t1).Seconds() < 2 {
 				nd, cmd1 := cfg.nCommitted(index)
+				testDebug("one: index=%v nd=%v cmd1=%v\n", index, nd, cmd1)
 				if nd > 0 && nd >= expectedServers {
 					// committed
 					if cmd1 == cmd {
@@ -597,7 +599,7 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 					}
 				}
 				time.Sleep(20 * time.Millisecond)
-				testDebug("%v %v\n", nd, cmd1)
+
 			}
 
 			if retry == false {
@@ -614,8 +616,8 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 }
 
 func testDebug(s string, a ...interface{}) {
-	return
-	fmt.Printf(s, a...)
+	// return
+	fmt.Printf("[TEST]"+s, a...)
 }
 
 // start a Test.
