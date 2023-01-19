@@ -32,7 +32,7 @@ import (
 	"6.824/labrpc"
 )
 
-const electionTimeout int64 = 400
+const electionTimeout int64 = 300
 
 var printVerbose bool = false
 var printInfo bool = true
@@ -81,12 +81,12 @@ type Raft struct {
 	applyChan     chan ApplyMsg
 	lastHeartBeat int64
 	role          int
-	currentTerm   int
-	votedFor      int
-	lastVoteTerm  int
+	currentTerm   int //persist
+	votedFor      int //persist
+	lastVoteTerm  int //persist
 
-	log         []interface{}
-	logTerm     []int
+	log         []interface{} //persist
+	logTerm     []int         //persist
 	commitIndex int
 	lastApplied int
 
@@ -126,6 +126,8 @@ func (rf *Raft) persist() {
 	e.Encode(rf.currentTerm)
 	e.Encode(rf.votedFor)
 	e.Encode(rf.log)
+	e.Encode(rf.logTerm)
+	e.Encode(rf.lastVoteTerm)
 	data := w.Bytes()
 	rf.persister.SaveRaftState((data))
 }
@@ -144,14 +146,18 @@ func (rf *Raft) readPersist(data []byte) {
 	currentTerm := 0
 	votedFor := 0
 	log := make([]interface{}, 0)
+	logTerm := make([]int, 0)
+	lastVoteTerm := 0
 	if d.Decode(&currentTerm) != nil ||
 		d.Decode(&votedFor) != nil ||
-		d.Decode(&log) != nil {
+		d.Decode(&log) != nil || d.Decode(&logTerm) != nil || d.Decode(&lastVoteTerm) != nil {
 		panic(1)
 	} else {
 		rf.currentTerm = currentTerm
 		rf.votedFor = votedFor
 		rf.log = log
+		rf.logTerm = logTerm
+		rf.lastVoteTerm = lastVoteTerm
 	}
 }
 
@@ -205,12 +211,14 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	defer rf.mu.Unlock()
 	if args.Term > rf.currentTerm {
 		rf.currentTerm = args.Term
+		rf.persist()
 		rf.role = follower
 	}
 	voteTrue := func() {
 		reply.VoteGranted = true
 		rf.votedFor = args.CandidateId
 		rf.lastVoteTerm = args.Term
+		rf.persist()
 		rf.verbose("vote true to %d", args.CandidateId)
 	}
 
@@ -258,9 +266,11 @@ type AppendEntriesReply struct {
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+
 	reply.Term = rf.currentTerm
 	if args.Term > rf.currentTerm {
 		rf.currentTerm = args.Term
+		rf.persist()
 		rf.role = follower
 	}
 	if args.Term < rf.currentTerm {
@@ -284,6 +294,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.verbose("recv heartbeat from %d", args.LearderId)
 		rf.lastHeartBeat = time.Now().UnixMilli()
 		rf.currentTerm = args.Term
+		rf.persist()
 		rf.role = follower
 		reply.Term = rf.currentTerm
 		if prevCorrect(args.PrevLogIndex, args.PrevLogTerm) {
@@ -471,6 +482,7 @@ func (rf *Raft) syncLog() {
 					}
 					if reply.Term > rf.currentTerm {
 						rf.currentTerm = reply.Term
+						rf.persist()
 						rf.role = follower
 						go rf.startElection(rf.currentTerm)
 					}
@@ -551,10 +563,12 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		term = rf.currentTerm
 		rf.log = append(rf.log, command)
 		rf.logTerm = append(rf.logTerm, term)
+		rf.persist()
 	}
 
 	// Your code here (2B).
 	rf.verbose("START return: index=%v term=%v isLeader=%v", index, term, isLeader)
+
 	return index, term, isLeader
 }
 
@@ -595,6 +609,7 @@ func (rf *Raft) ticker() {
 			rf.mu.Unlock()
 			rf.startElection(term)
 		} else {
+			//
 			rf.mu.Unlock()
 		}
 		tickerSleep()
@@ -606,7 +621,7 @@ func (rf *Raft) heartbeat() {
 		rf.mu.Lock()
 		rf.sendHeartbeats()
 		rf.mu.Unlock()
-		rf.sleep(electionTimeout / 3)
+		rf.sleep(electionTimeout / 2)
 	}
 }
 
@@ -654,6 +669,7 @@ func (rf *Raft) AddEntries(entries []LogEntry, startIndex int) {
 	}
 	rf.log = append(rf.log[:startIndex-1], newLog...)
 	rf.logTerm = append(rf.logTerm[:startIndex-1], newLogTerm...)
+	rf.persist()
 }
 
 func (rf *Raft) getLogTerm(index int) int {
@@ -684,6 +700,7 @@ func (rf *Raft) startElection(oldTerm int) {
 	startTerm := rf.currentTerm
 	rf.votedFor = rf.me
 	rf.lastVoteTerm = rf.currentTerm
+	rf.persist()
 	rf.role = candidate
 
 	rf.verbose("start election\n")
@@ -743,6 +760,7 @@ func (rf *Raft) startElection(oldTerm int) {
 			rf.verbose("candidate step down reply.term=%d myterm=%d", res.Term, rf.currentTerm)
 			rf.role = follower
 			rf.currentTerm = res.Term
+			rf.persist()
 		}
 		if granted >= winCount {
 			//now leader
@@ -787,7 +805,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.lastApplied = 0
 	rf.nextIndex = make([]int, len(peers))
 	rf.role = follower
-
 	// Your initialization code here (2A, 2B, 2C).
 	rf.lastHeartBeat = time.Now().UnixMilli()
 
