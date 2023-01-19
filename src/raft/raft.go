@@ -22,11 +22,11 @@ import (
 	"bytes"
 	"fmt"
 	"math/rand"
+	// "runtime"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
-
 	//	"6.824/labgob"
 	"6.824/labgob"
 	"6.824/labrpc"
@@ -34,8 +34,8 @@ import (
 
 const electionTimeout int64 = 300
 
-var printVerbose bool = true
-var printInfo bool = false
+var printVerbose bool = false
+var printInfo bool = true
 
 //
 // as each Raft peer becomes aware that successive log entries are
@@ -420,31 +420,32 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	} else if args.LastIncludedTerm != rf.getLogTerm(args.LastIncludedIndex) {
 		discardLog = true
 	}
-	rf.snapshotIndex = args.LastIncludedIndex
-	rf.snapshotTerm = args.LastIncludedTerm
+
 	if discardLog {
 		rf.log = make([]interface{}, 0)
 		rf.logTerm = make([]int, 0)
 	} else {
-		trimLen := args.LastIncludedTerm - rf.snapshotIndex
+		trimLen := args.LastIncludedIndex - rf.snapshotIndex
 		rf.log = rf.log[trimLen:]
 		rf.logTerm = rf.logTerm[trimLen:]
 	}
 	reply.Success = true
+	rf.snapshotIndex = args.LastIncludedIndex
+	rf.snapshotTerm = args.LastIncludedTerm
 	rf.snapshot = args.Snapshot
 	rf.persist()
 }
 
 func (rf *Raft) verbose(format string, a ...interface{}) { //may produce race
 	if printVerbose {
-		header := fmt.Sprintf("[%d,%d,%d] SSidx=%d ", rf.me, rf.currentTerm, rf.role, rf.snapshotIndex)
+		header := fmt.Sprintf("[%d,%d,%d]", rf.me, rf.currentTerm, rf.role)
 		fmt.Printf(header+format+"\n", a...)
 	}
 }
 
 func (rf *Raft) info(format string, a ...interface{}) { //may produce race
 	if printInfo {
-		header := fmt.Sprintf("[%d,%d] ", rf.me, rf.currentTerm)
+		header := fmt.Sprintf("[%d,%d,%d] ", rf.me, rf.currentTerm, rf.role)
 		fmt.Printf(header+format+"\n", a...)
 	}
 }
@@ -560,6 +561,7 @@ func (rf *Raft) syncLog() {
 						rf.currentTerm = reply.Term
 						rf.persist()
 						rf.role = follower
+						go rf.startElection(rf.currentTerm)
 					}
 					if reply.Success {
 						rf.nextIndex[from] = successNext
@@ -639,15 +641,15 @@ func (rf *Raft) updateCommit() {
 	}
 }
 
-func (rf *Raft) checkApply() {
+func (rf *Raft) checkApply() bool {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if rf.lastApplied < rf.commitIndex {
-		start := rf.lastApplied + 1
-		if start < 1 {
-			start = 1
+		applied := rf.lastApplied + 1
+		if applied < 1 {
+			applied = 1
 		}
-		if start <= rf.snapshotIndex {
+		if applied <= rf.snapshotIndex {
 			rf.verbose("APPLY SNAPSHOT %d:%d", rf.snapshotIndex, rf.snapshotTerm)
 			snapshotCopy := make([]byte, len(rf.snapshot))
 			copy(snapshotCopy, rf.snapshot)
@@ -662,21 +664,23 @@ func (rf *Raft) checkApply() {
 			rf.mu.Lock()
 			rf.verbose("APPLYMSG sent SNAPSHOT")
 			rf.lastApplied = rf.snapshotIndex
-			start = rf.snapshotIndex + 1
-		}
-		for i := start; i <= rf.commitIndex; i++ {
-			rf.verbose("APPLY %d", i)
+			return true
+		} else {
+			rf.verbose("APPLY %d", applied)
 			msg := ApplyMsg{
 				CommandValid: true,
-				Command:      rf.getLog(i),
-				CommandIndex: i,
+				Command:      rf.getLog(applied),
+				CommandIndex: applied,
 			}
 			rf.mu.Unlock()
 			rf.applyChan <- msg
 			rf.mu.Lock()
-			rf.verbose("APPLYMSG SENT idx=%d", i)
-			rf.lastApplied = i
+			rf.verbose("APPLYMSG SENT idx=%d", applied)
+			rf.lastApplied = applied
+			return true
 		}
+	} else {
+		return false
 	}
 }
 
@@ -763,7 +767,7 @@ func (rf *Raft) ticker() {
 }
 
 func (rf *Raft) heartbeat() {
-	for {
+	for !rf.killed() {
 		rf.mu.Lock()
 		rf.sendHeartbeats()
 		rf.mu.Unlock()
@@ -862,18 +866,19 @@ func (rf *Raft) startElection(oldTerm int) {
 		LastlogIndex: rf.lastLogIndex(),
 		LastLogTerm:  rf.lastLogTerm(),
 	}
-	reply := RequestVoteReply{
-		VoteGranted: false,
-	}
 
 	for remote := range rf.peers {
 		if remote == rf.me {
 			continue
 		}
-		go func(peer int, args RequestVoteArgs, reply RequestVoteReply) {
+		// rf.info("go sendRequestVote")
+		go func(peer int, args RequestVoteArgs) {
+			reply := RequestVoteReply{
+				VoteGranted: false,
+			}
 			rf.sendRequestVote(peer, &args, &reply)
 			voteChan <- reply
-		}(remote, args, reply)
+		}(remote, args)
 	}
 	// go func(start int64) {
 	// 	for {
@@ -945,6 +950,7 @@ func (rf *Raft) startElection(oldTerm int) {
 //
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
+	// fmt.Printf("gonum=%v\n", runtime.NumGoroutine())
 	rf := &Raft{}
 	rf.peers = peers
 	rf.persister = persister
@@ -964,10 +970,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go rf.ticker()
 	go rf.heartbeat()
 	go func() {
-		for {
+		for !rf.killed() {
 			rf.syncLog()
 			rf.updateCommit()
-			rf.checkApply()
+			for rf.checkApply() {
+			}
 			rf.sleep(electionTimeout / 3)
 		}
 	}()
