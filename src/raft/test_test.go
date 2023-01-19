@@ -20,7 +20,8 @@ import "sync"
 const RaftElectionTimeout = 1000 * time.Millisecond
 
 func TestInitialElection2A(t *testing.T) {
-	servers := 3
+	// servers := 3
+	servers := 10
 	cfg := make_config(t, servers, false, false)
 	defer cfg.cleanup()
 
@@ -91,7 +92,8 @@ func TestReElection2A(t *testing.T) {
 }
 
 func TestManyElections2A(t *testing.T) {
-	servers := 7
+	// servers := 7
+	servers := 17
 	cfg := make_config(t, servers, false, false)
 	defer cfg.cleanup()
 
@@ -530,7 +532,7 @@ func TestBackup2B(t *testing.T) {
 
 	// lots of successful commands to new group.
 	for i := 0; i < 50; i++ {
-		cfg.one(rand.Int(), 3, true)
+		cfg.one(i, 3, true)
 	}
 
 	// now another partitioned leader and one follower
@@ -558,7 +560,7 @@ func TestBackup2B(t *testing.T) {
 
 	// lots of successful commands to new group.
 	for i := 0; i < 50; i++ {
-		cfg.one(rand.Int(), 3, true)
+		cfg.one(111111, 3, true)
 	}
 
 	// now everyone

@@ -503,7 +503,7 @@ func (cfg *config) nCommitted(index int) (int, interface{}) {
 
 		cfg.mu.Lock()
 		cmd1, ok := cfg.logs[i][index]
-		testDebug("NCOMMIT logs[%v][%v]=%v", i, index, cmd1)
+		// testDebug("NCOMMIT logs[%v][%v]=%v", i, index, cmd1)
 		cfg.mu.Unlock()
 
 		if ok {
@@ -562,6 +562,7 @@ func (cfg *config) wait(index int, n int, startTerm int) interface{} {
 // if retry==false, calls Start() only once, in order
 // to simplify the early Lab 2B tests.
 func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
+	testDebug("ONE %v", cmd)
 	t0 := time.Now()
 	starts := 0
 	for time.Since(t0).Seconds() < 10 && cfg.checkFinished() == false {
@@ -590,7 +591,7 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 			t1 := time.Now()
 			for time.Since(t1).Seconds() < 2 {
 				nd, cmd1 := cfg.nCommitted(index)
-				testDebug("one: index=%v nd=%v cmd1=%v\n", index, nd, cmd1)
+				// testDebug("one: index=%v nd=%v cmd1=%v\n", index, nd, cmd1)
 				if nd > 0 && nd >= expectedServers {
 					// committed
 					if cmd1 == cmd {
@@ -616,7 +617,7 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 }
 
 func testDebug(s string, a ...interface{}) {
-	// return
+	return
 	fmt.Printf("[TEST]"+s, a...)
 }
 
