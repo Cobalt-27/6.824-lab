@@ -8,7 +8,7 @@
 - [x] Lab2B: Raft, log
 - [x] Lab2C: Raft, persistence
 - [x] Lab2D: Raft, log compaction
-- [ ] Lab3A: Fault-tolerant Key/Value Service without snapshots
+- [x] Lab3A: Fault-tolerant Key/Value Service without snapshots
 - [ ] Lab3B: Fault-tolerant Key/Value Service with snapshots
 - [ ] Lab4: Sharded Key/Value Service
 

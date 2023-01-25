@@ -1,5 +1,7 @@
 package raft
 
+//for i in {0..10}; do go test -run TestManyPartitionsManyClients3A; done
+
 //
 // this is an outline of the API that raft must expose to
 // the service (or tester). see comments below for
@@ -32,10 +34,10 @@ import (
 	"6.824/labrpc"
 )
 
-const electionTimeout int64 = 300
+const electionTimeout int64 = 100
 
 var printVerbose bool = false
-var printInfo bool = true
+var printInfo bool = false
 
 //
 // as each Raft peer becomes aware that successive log entries are
@@ -95,6 +97,9 @@ type Raft struct {
 
 	nextIndex  []int
 	matchIndex []int
+
+	// applyMu sync.Mutex
+	syncChan chan bool
 }
 
 // return currentTerm and whether this server
@@ -293,7 +298,9 @@ type AppendEntriesReply struct {
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
-	defer rf.mu.Unlock()
+	defer func() {
+		rf.mu.Unlock()
+	}()
 	reply.Term = rf.currentTerm
 	if args.Term > rf.currentTerm {
 		rf.currentTerm = args.Term
@@ -438,7 +445,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 
 func (rf *Raft) verbose(format string, a ...interface{}) { //may produce race
 	if printVerbose {
-		header := fmt.Sprintf("[%d,%d,%d]", rf.me, rf.currentTerm, rf.role)
+		header := fmt.Sprintf("[%d,%d,%d,%d,%d]", rf.me, rf.currentTerm, rf.role, rf.commitIndex, rf.lastLogIndex())
 		fmt.Printf(header+format+"\n", a...)
 	}
 }
@@ -530,6 +537,7 @@ func (rf *Raft) syncLog() {
 			continue
 		}
 		next := rf.nextIndex[remote]
+		rf.verbose("check sync %v next=%v match=%v", remote, next, rf.matchIndex[remote])
 		if next <= rf.lastLogIndex() {
 			rf.verbose("sync range=%d-%d to %d", next, rf.lastLogIndex(), remote)
 			prev := next - 1
@@ -633,11 +641,22 @@ func (rf *Raft) updateCommit() {
 	match := make([]int, rf.peerCount())
 	copy(match, rf.matchIndex)
 	sort.Ints(match)
-	rf.verbose("match: %v", match)
+	rf.verbose("lastTerm: %v match: %v", rf.lastLogTerm(), match)
 	newCommit := match[len(match)-rf.majority()]
-	if rf.getLogTerm(newCommit) == rf.currentTerm && rf.commitIndex < newCommit {
-		rf.commitIndex = newCommit
-		rf.verbose("COMMIT=%d", newCommit)
+	if rf.commitIndex < newCommit {
+
+		if rf.getLogTerm(newCommit) != rf.currentTerm {
+			// args := AppendEntriesArgs{
+			// 	Term:rf.currentTerm,
+			// 	LearderId: rf.me,
+			// 	PrevLogIndex: ,
+			// }
+			// reply := AppendEntriesReply{}
+			// rf.AppendEntries(&args, &reply)
+		} else {
+			rf.commitIndex = newCommit
+			rf.verbose("COMMIT=%d", newCommit)
+		}
 	}
 }
 
@@ -777,7 +796,6 @@ func (rf *Raft) heartbeat() {
 
 func (rf *Raft) sendHeartbeats() {
 	if rf.role == leader {
-		reply := AppendEntriesReply{}
 		for remote := range rf.peers {
 			if remote == rf.me {
 				rf.lastHeartBeat = time.Now().UnixMilli()
@@ -790,9 +808,18 @@ func (rf *Raft) sendHeartbeats() {
 				PrevLogTerm:  rf.getLogTerm(rf.lastLogIndex()),
 				LeaderCommit: rf.commitIndex,
 			}
-			go func(to int, args AppendEntriesArgs, reply AppendEntriesReply) {
+			last := rf.lastLogIndex()
+			go func(to int, args AppendEntriesArgs) {
+				reply := AppendEntriesReply{}
 				rf.sendAppendEntries(to, &args, &reply)
-			}(remote, args, reply)
+				if reply.Success {
+					rf.mu.Lock()
+					if rf.matchIndex[to] < last {
+						rf.matchIndex[to] = last
+					}
+					rf.mu.Unlock()
+				}
+			}(remote, args)
 		}
 	}
 }
@@ -871,7 +898,6 @@ func (rf *Raft) startElection(oldTerm int) {
 		if remote == rf.me {
 			continue
 		}
-		// rf.info("go sendRequestVote")
 		go func(peer int, args RequestVoteArgs) {
 			reply := RequestVoteReply{
 				VoteGranted: false,
@@ -880,18 +906,6 @@ func (rf *Raft) startElection(oldTerm int) {
 			voteChan <- reply
 		}(remote, args)
 	}
-	// go func(start int64) {
-	// 	for {
-	// 		if time.Now().UnixMilli()-start > electionTimeout*3 {
-	// 			for i := 0; i < rf.peerCount(); i++ {
-	// 				voteChan <- RequestVoteReply{
-	// 					VoteGranted: false,
-	// 				}
-	// 			}
-	// 		}
-	// 		rf.sleep(electionTimeout / 2)
-	// 	}
-	// }(time.Now().UnixMilli())
 
 	granted := 1 //1 vote from self
 	deny := 0
@@ -902,7 +916,7 @@ func (rf *Raft) startElection(oldTerm int) {
 		rf.mu.Unlock()
 		res := <-voteChan
 		rf.mu.Lock()
-		rf.verbose("get vote %t (%d)", res.VoteGranted, rf.peerCount())
+		rf.verbose("get vote %t)", res.VoteGranted)
 		if rf.role != candidate || rf.currentTerm != startTerm {
 			return
 		}
@@ -963,6 +977,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.role = follower
 	// Your initialization code here (2A, 2B, 2C).
 	rf.lastHeartBeat = time.Now().UnixMilli()
+	rf.syncChan = make(chan bool)
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 	rf.Snapshot(rf.snapshotIndex, persister.ReadSnapshot())
@@ -975,7 +990,13 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			rf.updateCommit()
 			for rf.checkApply() {
 			}
-			rf.sleep(electionTimeout / 3)
+			<-rf.syncChan
+		}
+	}()
+	go func() {
+		for !rf.killed() {
+			rf.syncChan <- true
+			rf.sleep(electionTimeout / 8)
 		}
 	}()
 	return rf

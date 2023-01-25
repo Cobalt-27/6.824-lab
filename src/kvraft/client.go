@@ -1,9 +1,23 @@
 package kvraft
 
-import "6.824/labrpc"
-import "crypto/rand"
-import "math/big"
+import (
+	"crypto/rand"
+	// "fmt"
+	"math/big"
+	// "runtime"
+	"time"
 
+	"6.824/labrpc"
+)
+
+const (
+	opPut    = 0
+	opAppend = 1
+	opGet    = 2
+	noop     = 3
+)
+
+const pollInterval int = 100
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
@@ -20,6 +34,7 @@ func nrand() int64 {
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
+	// fmt.Printf("gonum=%v\n", runtime.NumGoroutine())
 	// You'll have to add code here.
 	return ck
 }
@@ -37,9 +52,29 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 // arguments. and reply must be passed as a pointer.
 //
 func (ck *Clerk) Get(key string) string {
-
-	// You will have to modify this function.
-	return ""
+	DPrintf("###GET[%v]\n", key)
+	for {
+		for i, remote := range ck.servers {
+			args := GetArgs{
+				Key: key,
+				Uid: genUid(),
+			}
+			reply := GetReply{}
+			DPrintf("RPC GET[%v]", key)
+			ok := remote.Call("KVServer.Get", &args, &reply)
+			DPrintf("RPC END GET[%v] err=%v ok=%v", key, reply.Err, ok)
+			if !ok {
+				DPrintf("sendGet to [%v] failed\n", i)
+				continue
+			} else {
+				DPrintf("<< GET[%v] %v,%v\n", key, reply.Value, reply.Err)
+				if reply.Err == "OK" {
+					return reply.Value
+				}
+			}
+		}
+		time.Sleep(time.Duration(pollInterval * int(time.Millisecond)))
+	}
 }
 
 //
@@ -54,6 +89,33 @@ func (ck *Clerk) Get(key string) string {
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
+	DPrintf("###%v[%v:%v]\n", op, key, value)
+	myUid := genUid()
+	for {
+		for i, remote := range ck.servers {
+			args := PutAppendArgs{
+				Key:   key,
+				Value: value,
+				Op:    op,
+				Uid:   myUid,
+			}
+			reply := PutAppendReply{}
+			DPrintf("RPC %v %v:%v", op, key, value)
+			ok := remote.Call("KVServer.PutAppend", &args, &reply)
+			DPrintf("RPC END %v %v:%v", op, key, value)
+			if !ok {
+				DPrintf("%v to [%v] failed\n", op, i)
+				// return
+				continue
+			} else {
+				DPrintf("<< %v[%v:%v] %v\n", op, key, value, reply.Err)
+				if reply.Err == "OK" {
+					return
+				}
+			}
+		}
+		time.Sleep(time.Duration(pollInterval * int(time.Millisecond)))
+	}
 }
 
 func (ck *Clerk) Put(key string, value string) {
